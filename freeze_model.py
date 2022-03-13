@@ -25,9 +25,9 @@ def freeze_session(session, keep_var_names=None, output_names=None, clear_device
 
 
 def main():
-    phi = 1
+    phi = 0
     weighted_bifpn = False
-    model_path = 'checkpoints/2019-12-03/pascal_05_0.6283_1.1975_0.8029.h5'
+    model_path = 'checkpoints/2022-01-24/pascal_20_0.4298_0.4342.h5'
     image_sizes = (512, 640, 768, 896, 1024, 1280, 1408)
     image_size = image_sizes[phi]
     classes = [

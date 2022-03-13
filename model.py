@@ -13,6 +13,7 @@ from tensorflow.keras import models
 from tfkeras import EfficientNetB0, EfficientNetB1, EfficientNetB2
 from tfkeras import EfficientNetB3, EfficientNetB4, EfficientNetB5, EfficientNetB6
 
+from keras.applications.mobilenet_v2 import MobileNetV2
 from layers import ClipBoxes, RegressBoxes, FilterDetections, wBiFPNAdd, BatchNormalization
 from initializers import PriorProbability
 from utils.anchors import anchors_for_shape
@@ -348,7 +349,7 @@ class BoxNet(models.Model):
         feature, level = inputs
         for i in range(self.depth):
             feature = self.convs[i](feature)
-            feature = self.bns[i][self.level](feature)
+            feature = self.bns[i][tf.get_static_value(level)](feature)
             feature = self.relu(feature)
         outputs = self.head(feature)
         outputs = self.reshape(outputs)
@@ -407,14 +408,13 @@ class ClassNet(models.Model):
         feature, level = inputs
         for i in range(self.depth):
             feature = self.convs[i](feature)
-            feature = self.bns[i][self.level](feature)
+            feature = self.bns[i][tf.get_static_value(level)](feature)
             feature = self.relu(feature)
         outputs = self.head(feature)
         outputs = self.reshape(outputs)
         outputs = self.activation(outputs)
         self.level += 1
         return outputs
-
 
 def efficientdet(phi, num_classes=20, num_anchors=9, weighted_bifpn=False, freeze_bn=False,
                  score_threshold=0.01, detect_quadrangle=False, anchor_parameters=None, separable_conv=True):
@@ -469,6 +469,67 @@ def efficientdet(phi, num_classes=20, num_anchors=9, weighted_bifpn=False, freez
     prediction_model = models.Model(inputs=[image_input], outputs=detections, name='efficientdet_p')
     return model, prediction_model
 
+def mobilenet_v2_det(num_classes=20, num_anchors=9, weighted_bifpn=False, freeze_bn=False,
+                 score_threshold=0.01, detect_quadrangle=False, anchor_parameters=None, separable_conv=True):
+    input_size = 512
+    input_shape = (input_size, input_size, 3)
+    image_input = layers.Input(input_shape)
+    w_bifpn = 64
+    d_bifpn = 3
+    w_head = w_bifpn
+    d_head = d_bifpn
+    base_model = MobileNetV2(weights='imagenet',include_top=False, input_tensor=image_input)
+
+    features = [None, None]
+    layer_1 = base_model.get_layer("block_5_add").output
+    layer_2 = base_model.get_layer("block_12_add").output
+    layer_3 = base_model.get_layer("block_15_add").output
+    features.append(layer_1)
+    features.append(layer_2)
+    features.append(layer_3)
+    if weighted_bifpn:
+        fpn_features = features
+        for i in range(d_bifpn):
+            fpn_features = build_wBiFPN(fpn_features, w_bifpn, i, freeze_bn=freeze_bn)
+    else:
+        fpn_features = features
+        for i in range(d_bifpn):
+            fpn_features = build_BiFPN(fpn_features, w_bifpn, i, freeze_bn=freeze_bn)
+    box_net = BoxNet(w_head, d_head, num_anchors=num_anchors, separable_conv=separable_conv, freeze_bn=freeze_bn,
+                     detect_quadrangle=detect_quadrangle, name='box_net')
+    class_net = ClassNet(w_head, d_head, num_classes=num_classes, num_anchors=num_anchors,
+                         separable_conv=separable_conv, freeze_bn=freeze_bn, name='class_net')
+    classification = [class_net([feature, i]) for i, feature in enumerate(fpn_features)]
+    classification = layers.Concatenate(axis=1, name='classification')(classification)
+    regression = [box_net([feature, i]) for i, feature in enumerate(fpn_features)]
+    regression = layers.Concatenate(axis=1, name='regression')(regression)
+
+    model = models.Model(inputs=[image_input], outputs=[classification, regression], name='efficientdet')
+
+    # apply predicted regression to anchors
+    anchors = anchors_for_shape((input_size, input_size), anchor_params=anchor_parameters)
+    anchors_input = np.expand_dims(anchors, axis=0)
+    boxes = RegressBoxes(name='boxes')([anchors_input, regression[..., :4]])
+    boxes = ClipBoxes(name='clipped_boxes')([image_input, boxes])
+
+    # filter detections (apply NMS / score threshold / select top-k)
+    if detect_quadrangle:
+        detections = FilterDetections(
+            name='filtered_detections',
+            score_threshold=score_threshold,
+            detect_quadrangle=True
+        )([boxes, classification, regression[..., 4:8], regression[..., 8]])
+    else:
+        detections = FilterDetections(
+            name='filtered_detections',
+            score_threshold=score_threshold
+        )([boxes, classification])
+
+    prediction_model = models.Model(inputs=[image_input], outputs=detections, name='efficientdet_p')
+    return model, prediction_model
 
 if __name__ == '__main__':
-    x, y = efficientdet(1)
+    x, y = mobilenet_v2_det()
+    
+    # x, y = efficientdet(0)
+    print("Model setup done")

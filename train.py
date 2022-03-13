@@ -31,7 +31,7 @@ from tensorflow.keras.optimizers import Adam, SGD
 
 from augmentor.color import VisualEffect
 from augmentor.misc import MiscEffect
-from model import efficientdet
+from model import efficientdet, mobilenet_v2_det
 from losses import smooth_l1, focal, smooth_l1_quad
 from efficientnet import BASE_WEIGHTS_PATH, WEIGHTS_HASHES
 
@@ -282,7 +282,7 @@ def parse_args(args):
     parser.add_argument('--random-transform', help='Randomly transform image and annotations.', action='store_true')
     parser.add_argument('--compute-val-loss', help='Compute validation loss during training', dest='compute_val_loss',
                         action='store_true')
-
+    parser.add_argument('--backbone', help='Backbone of the model', type=str, default='mobilenetv2')
     # Fit generator arguments
     parser.add_argument('--multiprocessing', help='Use multiprocessing in fit_generator.', action='store_true')
     parser.add_argument('--workers', help='Number of generator workers.', type=int, default=1)
@@ -309,14 +309,24 @@ def main(args=None):
         os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 
     # K.set_session(get_session())
+    model, prediction_model = None, None
 
-    model, prediction_model = efficientdet(args.phi,
-                                           num_classes=num_classes,
-                                           num_anchors=num_anchors,
-                                           weighted_bifpn=args.weighted_bifpn,
-                                           freeze_bn=args.freeze_bn,
-                                           detect_quadrangle=args.detect_quadrangle
-                                           )
+    if args.backbone == 'effcientnet':
+        model, prediction_model = efficientdet(args.phi,
+                                            num_classes=num_classes,
+                                            num_anchors=num_anchors,
+                                            weighted_bifpn=args.weighted_bifpn,
+                                            freeze_bn=args.freeze_bn,
+                                            detect_quadrangle=args.detect_quadrangle
+                                            )
+    elif args.backbone == 'mobilenetv2':
+        model, prediction_model = mobilenet_v2_det(num_classes=num_classes,
+                                            num_anchors=num_anchors,
+                                            weighted_bifpn=args.weighted_bifpn,
+                                            freeze_bn=args.freeze_bn,
+                                            detect_quadrangle=args.detect_quadrangle
+                                            )
+
     # load pretrained weights
     if args.snapshot:
         if args.snapshot == 'imagenet':
@@ -334,9 +344,14 @@ def main(args=None):
 
     # freeze backbone layers
     if args.freeze_backbone:
-        # 227, 329, 329, 374, 464, 566, 656
-        for i in range(1, [227, 329, 329, 374, 464, 566, 656][args.phi]):
-            model.layers[i].trainable = False
+        if args.backbone == 'effcientnet':
+            # 227, 329, 329, 374, 464, 566, 656
+            for i in range(1, [227, 329, 329, 374, 464, 566, 656][args.phi]):
+                model.layers[i].trainable = False
+        elif args.backbone == 'mobilenetv2':
+            # 227, 329, 329, 374, 464, 566, 656
+            for i in range(1, 58):
+                model.layers[i].trainable = False
 
     if args.gpu and len(args.gpu.split(',')) > 1:
         model = keras.utils.multi_gpu_model(model, gpus=list(map(int, args.gpu.split(','))))
@@ -363,8 +378,8 @@ def main(args=None):
         raise ValueError('When you have no validation data, you should not specify --compute-val-loss.')
 
     # start training
-    return model.fit_generator(
-        generator=train_generator,
+    return model.fit(
+        train_generator,
         steps_per_epoch=args.steps,
         initial_epoch=0,
         epochs=args.epochs,

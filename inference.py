@@ -13,15 +13,20 @@ from utils.draw_boxes import draw_boxes
 def main():
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
-    phi = 1
-    weighted_bifpn = True
-    model_path = 'efficientdet-d1.h5'
+    phi = 0
+    weighted_bifpn = False
+    model_path = 'checkpoints/2022-01-24/pascal_20_0.4298_0.4342.h5'
     image_sizes = (512, 640, 768, 896, 1024, 1280, 1408)
     image_size = image_sizes[phi]
     # coco classes
-    classes = {value['id'] - 1: value['name'] for value in json.load(open('coco_90.json', 'r')).values()}
-    num_classes = 90
-    score_threshold = 0.3
+    # classes = {value['id'] - 1: value['name'] for value in json.load(open('coco_90.json', 'r')).values()}
+    # num_classes = 90
+    classes = [
+        'aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair',
+        'cow', 'diningtable', 'dog', 'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor',
+    ]
+    num_classes = len(classes)
+    score_threshold = 0.5
     colors = [np.random.randint(0, 256, 3).tolist() for _ in range(num_classes)]
     _, model = efficientdet(phi=phi,
                             weighted_bifpn=weighted_bifpn,
@@ -29,7 +34,7 @@ def main():
                             score_threshold=score_threshold)
     model.load_weights(model_path, by_name=True)
 
-    for image_path in glob.glob('datasets/VOC2007/JPEGImages/*.jpg'):
+    for image_path in glob.glob('D:/Study/VOC2012/JPEGImages/*.jpg'):
         image = cv2.imread(image_path)
         src_image = image.copy()
         # BGR -> RGB
